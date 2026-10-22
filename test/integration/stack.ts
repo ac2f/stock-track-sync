@@ -341,6 +341,28 @@ export class Stack {
     this.tables = schema.data.tables;
   }
 
+  /** Merkezde gerçek stok girişi (alış): depo stoğu ve toplam birlikte artar. */
+  async primaryPurchase(quantity: number): Promise<void> {
+    const supplier = await this.P('POST', '/suppliers', { token: this.owner, shop: this.shop, body: { name: `Tedarikçi ${this.tag}` } });
+    const res = await this.P('POST', '/purchases', {
+      token: this.owner,
+      shop: this.shop,
+      body: { supplierId: supplier.data.id, items: [{ plateId: this.plate, quantity, unitPrice: 1 }] },
+    });
+    if (res.status !== 201) throw new Error(`alış yapılamadı: ${res.status} ${JSON.stringify(res.data)}`);
+  }
+
+  /** Merkezde satış (yeni müşteriye). */
+  async primarySale(quantity: number): Promise<void> {
+    const c = await this.P('POST', '/customers', { token: this.owner, shop: this.shop, body: { name: `Merkez alıcı ${Date.now()}` } });
+    const res = await this.P('POST', '/sales', {
+      token: this.owner,
+      shop: this.shop,
+      body: { buyerCustomerId: c.data.id, items: [{ plateId: this.plate, quantity, unitPrice: 1 }] },
+    });
+    if (res.status !== 201) throw new Error(`satış yapılamadı: ${res.status} ${JSON.stringify(res.data)}`);
+  }
+
   agentEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     return {
       PATH: process.env.PATH,

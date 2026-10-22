@@ -82,3 +82,15 @@ describe('rebase yardımcıları', () => {
     expect(chunks([], 1000)).toEqual([]);
   });
 });
+
+describe("crossesDecade (merkezin metin sıralaması önlemi)", () => {
+  it("bekleyen aralık 10'un kuvvetini aşabiliyorsa true", async () => {
+    const { crossesDecade } = await import('../../src/pull.js');
+    expect(crossesDecade(34n, 1539n)).toBe(true); // 35 → 1539
+    expect(crossesDecade(999n, 1539n)).toBe(false); // hepsi 4 hane
+    expect(crossesDecade(1000n, 4999n)).toBe(false);
+    expect(crossesDecade(1000n, 5000n)).toBe(true); // büyüme payıyla 10000'e yaklaşıyor
+    expect(crossesDecade(9_999n, 10_000n)).toBe(false); // 10000'den itibaren 5 hane
+    expect(crossesDecade(0n, 0n)).toBe(true);
+  });
+});

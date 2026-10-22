@@ -17,7 +17,7 @@ import {
 import type { Logger } from './logger.js';
 import { maintain } from './maintenance.js';
 import { Pusher, resetPushing } from './outbox.js';
-import { pull } from './pull.js';
+import { pull, type PullOptions, type PullSummary } from './pull.js';
 import { rebase } from './rebase.js';
 import { loadCatalog, SchemaError, SyncSchema, type Catalog } from './schema.js';
 import { NewWritesError, snapshot } from './snapshot.js';
@@ -367,7 +367,7 @@ export class Agent {
   /** Olağan tur: gönder → (duraklat) kalanları gönder → rebase → çek. true: çekilecek daha var. */
   private async syncOnce(ctx: SyncContext, hello: Hello): Promise<boolean> {
     this.logPush(await this.pusher.pushAll());
-    let resnapshot = false;
+    let resnapshot: string | null = null;
     const more = await this.withPause(async () => {
       if (!(await this.waitExecuting())) {
         this.log.info('tour.busy', 'Yerel sunucuda süren işlem var; geri alma ve çekme sonraki tura kaldı.');
@@ -385,19 +385,22 @@ export class Agent {
         );
       }
       try {
-        const p = await pull(ctx, { maxPages: PULL_MAX_PAGES, budgetMs: PULL_BUDGET_MS, sleep: (ms) => this.sleep(ms) });
-        if (p.changes) this.log.info('pull.done', `Merkezden ${p.changes} değişiklik alındı (imleç ${p.lastSeq}).`, { ...p });
+        const p = await pull(ctx, this.pullOptions(hello));
+        this.logPull(p);
         return p.more;
       } catch (err) {
         if (err instanceof UpstreamError && err.kind === 'resnapshot') {
-          resnapshot = true;
+          resnapshot =
+            err.status === 410
+              ? 'Merkezin değişiklik günlüğü bu yerel sunucunun imlecinden eski kısmı silmiş (410), baştan yükleme'
+              : `Değişiklikler güvenle çekilemiyor (${err.message}), baştan yükleme`;
           return false;
         }
         throw err;
       }
     });
     if (resnapshot) {
-      await this.load(ctx, hello, 'Merkezin değişiklik günlüğü bu yerel sunucunun imlecinden eski kısmı silmiş (410), baştan yükleme');
+      await this.load(ctx, hello, resnapshot);
       return true;
     }
     return more;
@@ -419,11 +422,22 @@ export class Agent {
       if (fresh.serverId !== hello.serverId || fresh.schemaHash !== hello.schemaHash) {
         throw new SchemaError('Merkez yükleme başlarken değişti; yeniden denenecek.');
       }
-      const s = await snapshot(ctx, { seq0: fresh.seq, serverId: fresh.serverId });
+      // Günlük tamamen budanmışsa merkez seq=0 der ama prunedSeq'ten gerisi 410 olur.
+      const seq0 = BigInt(fresh.seq) > BigInt(fresh.prunedSeq) ? fresh.seq : fresh.prunedSeq;
+      const s = await snapshot(ctx, { seq0, serverId: fresh.serverId });
       this.log.info('snapshot.done', `${reason} bitti: ${s.rows} satır, ${s.tables} tablo, ${(s.ms / 1000).toFixed(1)} sn.`, { ...s });
-      const p = await pull(ctx, { maxPages: PULL_MAX_PAGES, budgetMs: PULL_BUDGET_MS, sleep: (ms) => this.sleep(ms) });
-      if (p.changes) this.log.info('pull.done', `Merkezden ${p.changes} değişiklik alındı (imleç ${p.lastSeq}).`, { ...p });
+      this.logPull(await pull(ctx, this.pullOptions(fresh)));
     });
+  }
+
+  private pullOptions(hello: Hello): PullOptions {
+    return { maxPages: PULL_MAX_PAGES, budgetMs: PULL_BUDGET_MS, sleep: (ms) => this.sleep(ms), upstreamSeq: hello.seq };
+  }
+
+  private logPull(p: PullSummary): void {
+    if (!p.changes) return;
+    const repaired = p.repaired ? `; sayfa sınırındaki ${p.repaired} satır merkezden ayrıca alınıp onarıldı` : '';
+    this.log.info('pull.done', `Merkezden ${p.changes} değişiklik alındı (imleç ${p.lastSeq}${repaired}).`, { ...p });
   }
 
   private logPush(p: { sent: number; applied: number; rejected: number; blocked: boolean }): void {
