@@ -1,0 +1,30 @@
+{
+  "name": "stock-track-sync",
+  "version": "1.0.0",
+  "description": "StockTrack eşitleme ajanı: dükkândaki yerel sunucu ile merkez sunucuyu eşitler",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "check": "node dist/main.js --check",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --dir test/unit",
+    "test:integration": "npm run build && vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/pg": "^8.15.5",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
