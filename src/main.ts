@@ -31,6 +31,10 @@ if (args.has('--check')) {
   process.exit(await check(config, warnings));
 }
 
+if (args.has('--resnapshot')) {
+  process.exit(await requestResnapshot(config));
+}
+
 const log = createLogger({
   dir: config.logDir,
   secrets: [config.replicaToken, config.replicaDbUrl],
@@ -119,4 +123,23 @@ async function check(cfg: Config, warns: string[]): Promise<number> {
   }
   console.log(ok ? 'Her şey hazır.' : 'Sorunları düzeltip yeniden deneyin (README › Sorun giderme).');
   return ok ? 0 : 1;
+}
+
+/** `--resnapshot`: elle kurtarma. Çalışan ajan bir sonraki turda bekleyenleri gönderip baştan yükler. */
+async function requestResnapshot(cfg: Config): Promise<number> {
+  const db = createDb(cfg.replicaDbUrl, createLogger({ dir: null, console: false }));
+  try {
+    const { rowCount } = await db.query(`UPDATE replica_state SET snapshot_at = NULL, updated_at = now() WHERE id = 1`);
+    console.log(
+      rowCount
+        ? 'Baştan yükleme istendi: ajan bir sonraki turda önce bekleyen işlemleri gönderecek, sonra yerel veriyi merkezden yeniden yükleyecek.'
+        : 'Henüz ilk yükleme yapılmamış; ajan başlayınca zaten yükleyecek.',
+    );
+    return 0;
+  } catch (err) {
+    console.error(describeError(err));
+    return 1;
+  } finally {
+    await db.end().catch(() => undefined);
+  }
 }

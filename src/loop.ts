@@ -34,7 +34,11 @@ const CLOCK_SKEW_MS = 2 * 60_000;
 /** Bir turda çekme sınırı: duraklatma (yerel yazmalar bekler) kısa kalsın. */
 const PULL_MAX_PAGES = 20;
 const PULL_BUDGET_MS = 8_000;
-/** Duraklatılmış bölümde en çok bu kadar parti gönderilir; kalanı sonraki tura. */
+/**
+ * Bir turda gönderilecek parti sınırı: duraklatmadan önce (yoğun dükkânda
+ * sürekli yeni işlem gelse de geri alma/çekme aç kalmasın) ve duraklatılmışken.
+ */
+const OPEN_PUSH_BATCHES = 20;
 const PAUSED_PUSH_BATCHES = 3;
 const MAINTENANCE_EVERY_MS = 24 * 3_600_000;
 const MAINTENANCE_FIRST_MS = 15 * 60_000;
@@ -239,8 +243,9 @@ export class Agent {
         info = await localInfo(this.config.localApiUrl);
       } catch (err) {
         const text = `Yerel sunucuya ulaşılamıyor (${this.config.localApiUrl}: ${(err as Error).message}); eşitleme bekliyor.`;
+        if (this.lastError !== text) this.log.warn('local.unreachable', text);
+        this.lastError = text;
         await this.status({ last_error: text });
-        this.log.warn('local.unreachable', text);
         return { kind: 'offline' };
       }
       if (info.role !== 'replica') {
@@ -277,7 +282,7 @@ export class Agent {
         BigInt(hello.prunedSeq) < BigInt(state.last_seq);
       let more = false;
       if (!state.snapshot_at || state.last_seq == null) {
-        await this.load(ctx, hello, 'İlk yükleme');
+        await this.load(ctx, hello, state.last_seq == null ? 'İlk yükleme' : 'İstenen baştan yükleme');
       } else if (restored) {
         await this.load(ctx, hello, `Merkezin imleci geriledi (${state.last_seq} → ${hello.seq}; yedekten dönülmüş olabilir), baştan yükleme`);
       } else {
@@ -366,16 +371,18 @@ export class Agent {
 
   /** Olağan tur: gönder → (duraklat) kalanları gönder → rebase → çek. true: çekilecek daha var. */
   private async syncOnce(ctx: SyncContext, hello: Hello): Promise<boolean> {
-    this.logPush(await this.pusher.pushAll());
+    this.logPush(await this.pusher.pushAll(OPEN_PUSH_BATCHES));
     let resnapshot: string | null = null;
     const more = await this.withPause(async () => {
       if (!(await this.waitExecuting())) {
+        // Normal aralıkla yeniden denenir: yerel yazmalar sürekli bekletilmesin.
         this.log.info('tour.busy', 'Yerel sunucuda süren işlem var; geri alma ve çekme sonraki tura kaldı.');
-        return true;
+        return false;
       }
       const pushed = await this.pusher.pushAll(PAUSED_PUSH_BATCHES);
       this.logPush(pushed);
-      if (pushed.blocked || (await hasUnsent(this.db))) return false;
+      if (pushed.blocked) return false; // merkez "sonra" dedi: normal aralıkla
+      if (await hasUnsent(this.db)) return true; // gönderilecek daha var: hemen yeni tur
       const rb = await rebase(ctx);
       if (rb && rb.rows) {
         this.log.info(

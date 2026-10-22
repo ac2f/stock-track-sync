@@ -1,0 +1,37 @@
+# StockTrack eşitleme ajanı — Linux (systemd) örneği. Kurulum: README › Linux.
+#   /opt/stocktrack-sync          → dist/, node_modules/, package.json
+#   /etc/stocktrack-sync.env      → UPSTREAM_URL=…, REPLICA_TOKEN=…, REPLICA_DB_URL=…
+#                                   (sahibi root, izin 600: anahtar ve parola içerir)
+[Unit]
+Description=StockTrack eşitleme ajanı (yerel sunucu ↔ merkez)
+Documentation=https://github.com/ac2f/stock-track-sync
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stocktrack-sync
+Group=stocktrack-sync
+WorkingDirectory=/opt/stocktrack-sync
+EnvironmentFile=/etc/stocktrack-sync.env
+Environment=NODE_ENV=production
+Environment=LOG_DIR=/var/log/stocktrack-sync
+ExecStart=/usr/bin/node /opt/stocktrack-sync/dist/main.js
+# Çökünce yeniden başlat. Çıkış kodu 2: kişi müdahalesi gerekir (ikinci ajan,
+# merkezin veritabanına bağlanma) — yeniden başlatmak çözmez.
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=2
+KillSignal=SIGTERM
+TimeoutStopSec=40
+LogsDirectory=stocktrack-sync
+LogsDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

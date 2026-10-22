@@ -6,6 +6,11 @@ import { UpstreamError, type PushOp, type PushResult, type Upstream } from './up
 export const MAX_BATCH = 100;
 /** Merkezin gövde sınırı (Express varsayılanı 100 KB) altında kalmak için. */
 export const MAX_BATCH_BYTES = 90 * 1024;
+/**
+ * Tek işlem bundan büyükse merkez hiç kabul etmez (sınırı aşan istek merkezde
+ * 413 yerine 500 döner, "geçici hata" sanılıp sırayı sonsuza dek tıkardı).
+ */
+export const MAX_OP_BYTES = 100 * 1024 - 64;
 
 type Next = 'applied' | 'rejected' | 'pending';
 
@@ -97,12 +102,16 @@ export function compareCreated(
   return { idMap: idMap.length ? idMap : null, note: notes.length ? notes.join(' ') : null };
 }
 
+export function opBytes(op: unknown): number {
+  return Buffer.byteLength(JSON.stringify(op));
+}
+
 /** Partinin serileştirilmiş boyutuna göre ön kısmı (en az bir işlem). */
 export function fitBatch<T>(items: T[], maxCount = MAX_BATCH, maxBytes = MAX_BATCH_BYTES): T[] {
   const out: T[] = [];
   let bytes = 16;
   for (const it of items.slice(0, maxCount)) {
-    const size = Buffer.byteLength(JSON.stringify(it)) + 1;
+    const size = opBytes(it) + 1;
     if (out.length && bytes + size > maxBytes) break;
     out.push(it);
     bytes += size;
@@ -140,6 +149,12 @@ export class Pusher {
       );
       if (!rows.length) break;
       const batch = fitBatch(rows.map(toOp));
+      if (batch.length === 1 && opBytes(batch[0]!) > MAX_OP_BYTES) {
+        await this.rejectTooLarge(rows[0]!, opBytes(batch[0]!));
+        total.sent++;
+        total.rejected++;
+        continue;
+      }
       const r = await this.send(rows.slice(0, batch.length));
       total.sent += r.sent;
       total.applied += r.applied;
@@ -249,6 +264,15 @@ export class Pusher {
       }
     }
     return total;
+  }
+
+  private async rejectTooLarge(row: OutboxRow, bytes: number): Promise<void> {
+    const error = `Gönderilemedi: işlem merkeze gönderilemeyecek kadar büyük (${Math.ceil(bytes / 1024)} KB, sınır 100 KB).`;
+    await this.db.query(
+      `UPDATE replica_outbox SET state = 'rejected', error = $2, updated_at = now() WHERE id = $1 AND state = 'pending'`,
+      [row.id, error],
+    );
+    this.log.warn('push.too_large', `${error} ${row.method} ${row.path}`, { opId: row.id });
   }
 
   /** Yanıtı alınamayan parti: `pushing` → `pending` (merkez tekrarı önler). */

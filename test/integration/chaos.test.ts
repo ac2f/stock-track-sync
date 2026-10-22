@@ -186,4 +186,23 @@ describe('kaos', () => {
     expect(await primaryCount(`sales WHERE shop_id = $1`, [s.shop])).toBe(salesBefore);
     await s.assertConverged();
   });
+
+  it('merkeze sığmayacak kadar büyük işlem sırayı tıkamaz: kişinin kararına bırakılır, sonrakiler gider', async () => {
+    await offline();
+    // Yerel sunucu bu büyüklükte isteği zaten almaz; giden kutusuna doğrudan yazılıyor.
+    const big = `big-${s.tag}-0001`;
+    const me = (await s.L('GET', '/auth/me', { token: lt })).data.id;
+    await s.rdb.query(
+      `INSERT INTO replica_outbox (id, state, actor, user_id, shop_id, method, path, body, occurred_at)
+       VALUES ($1, 'pending', 'user', $2, $3, 'POST', '/v1/customers', $4, now())`,
+      [big, me, s.shop, JSON.stringify({ name: 'Büyük', notes: 'x'.repeat(110_000) })],
+    );
+    const after = await s.L('POST', '/customers', { token: lt, shop: s.shop, body: { name: `Arkadaki ${s.tag}` } });
+    s.proxy.up = true;
+    await s.assertConverged();
+    const [row] = await s.outbox('id = $1', [big]);
+    expect(row!.state).toBe('rejected');
+    expect(row!.error).toMatch(/gönderilemeyecek kadar büyük/);
+    expect((await s.pdb.query(`SELECT 1 FROM customers WHERE id = $1`, [after.data.id])).rowCount, 'arkadaki işlem gitti').toBe(1);
+  });
 });

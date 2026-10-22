@@ -102,4 +102,26 @@ describe('baştan yükleme (410)', () => {
     await s.primarySale(1);
     await s.assertConverged();
   });
+
+  it('--resnapshot ile elle baştan yükleme: bekleyen önce gönderilir, giden kutusu kalır', async () => {
+    const lt = await s.localLogin();
+    await s.stopAgent();
+    const c = (await s.L('POST', '/customers', { token: lt, shop: s.shop, body: { name: `Elle ${s.tag}` } })).data.id;
+    const outboxBefore = (await s.outbox()).map((o) => o.id);
+    const snapshotBefore = (await s.state()).snapshot_at;
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync(process.execPath, ['dist/main.js', '--resnapshot'], { env: s.agentEnv(), encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/Baştan yükleme istendi/);
+
+    await s.startAgent();
+    await waitFor(async () => {
+      const st = await s.state();
+      return st.snapshot_at && new Date(st.snapshot_at) > new Date(snapshotBefore);
+    }, { what: 'baştan yükleme' });
+    await s.assertConverged();
+    expect(s.agent!.lines.some((l) => /İstenen baştan yükleme bitti/.test(l))).toBe(true);
+    expect((await s.pdb.query(`SELECT 1 FROM customers WHERE id = $1`, [c])).rowCount).toBe(1);
+    expect((await s.outbox()).map((o) => o.id).slice(0, outboxBefore.length)).toEqual(outboxBefore);
+  });
 });

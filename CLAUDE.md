@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+Bu repo StockTrack eşitleme ajanıdır. Proje sözleşmesi ve görev tanımı
+(ana talimat) aşağıdaki belgededir; çelişkide o geçerlidir. Ayrıntılı
+protokol: `stock-track` reposunda `docs/SYNC.md`.
+
+@docs/SYNC_AGENT_MASTER_PROMPT.md
+
+---
+
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
